@@ -1,0 +1,132 @@
+---
+title: "Database Connection and Population"
+author: "Joseph Keogh"
+date: "10/12/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RPostgreSQL)
+library(tidyverse)
+library(lubridate)
+```
+
+## Retrieve data from PJM
+
+### Connect and get raw energy data
+```{r}
+pnode=34964545
+
+r <- GET(
+  "https://api.pjm.com/api/v1/rt_unverified_fivemin_lmps", 
+  add_headers("Ocp-Apim-Subscription-Key" = "625845c6fabc4639ab91428486d8d2e2"),
+  query = 
+    list(rowCount = 3000, startRow = "1", 
+         pnode_id = pnode, 
+         sort='datetime_beginning_ept'
+         )
+  )
+
+temp = httr::content(r,"parsed")
+
+gen_data_today = data.table::rbindlist(temp[['items']])
+
+colnames(gen_data_today)
+head(gen_data_today)
+count(gen_data_today)
+```
+
+### Create Dataframe for Energy Data
+```{r}
+
+energy_clean <- gen_data_today %>%
+  
+  # remove empty data
+  na.omit() %>%
+  
+  # create date object
+  mutate(date = str_sub(datetime_beginning_utc, 1, 10)) %>%
+  mutate(date = ymd(date)) %>%
+  
+  # create time object
+  mutate(time = str_sub(datetime_beginning_utc, 12, 19)) %>%
+  mutate(time = hms(time)) %>%
+  
+  # create datetime object
+  mutate(datetime = ymd(date)+hms(time)) %>%
+  
+  # only bring values we need
+  select(datetime, date, time, pnode_id, pnode_name, total_lmp_rt)
+
+```
+
+### Connect and get raw forecasting data
+```{r}
+
+```
+
+### Create dataframe for forecasting data
+```{r}
+
+```
+
+
+## Insert data into database
+
+### DB Connection
+```{r}
+# load credentials
+username <- "jgk7uf@va-energy2"
+hostname <- "va-energy2.postgres.database.azure.com"
+password <- "0Tn5KBFbm2&6bG"
+dbname <- "postgres"
+
+# open credentials
+db_driver <- dbDriver("PostgreSQL")
+db <- dbConnect(db_driver, user=username, password=password, dbname=dbname, host=hostname)
+
+# test connection if returns true the db is connected
+print(dbExistsTable(db, "test_table"))
+```
+
+### Create tables if needed
+```{r}
+
+# drop existing data
+dbGetQuery(db, "DROP TABLE test_table")
+
+# create and write table
+dbWriteTable(db, "test_table", energy_clean, row.names=FALSE)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
