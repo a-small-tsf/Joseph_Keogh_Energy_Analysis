@@ -12,6 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(RPostgreSQL)
 library(tidyverse)
 library(lubridate)
+library(httr)
 ```
 
 ## Retrieve data from PJM
@@ -24,7 +25,7 @@ r <- GET(
   "https://api.pjm.com/api/v1/rt_unverified_fivemin_lmps", 
   add_headers("Ocp-Apim-Subscription-Key" = "625845c6fabc4639ab91428486d8d2e2"),
   query = 
-    list(rowCount = 3000, startRow = "1", 
+    list(rowCount = 1000, startRow = "1", 
          pnode_id = pnode, 
          sort='datetime_beginning_ept'
          )
@@ -92,7 +93,7 @@ db <- dbConnect(db_driver, user=username, password=password, dbname=dbname, host
 print(dbExistsTable(db, "test_table"))
 ```
 
-### Create tables if needed
+### Create tables
 ```{r}
 
 # drop existing data
@@ -101,6 +102,11 @@ dbGetQuery(db, "DROP TABLE test_table")
 # create and write table
 dbWriteTable(db, "test_table", energy_clean, row.names=FALSE)
 
+```
+
+## End of file
+```{r}
+"End of File"
 ```
 
 

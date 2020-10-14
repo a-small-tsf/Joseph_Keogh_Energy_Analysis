@@ -1,0 +1,262 @@
+---
+title: "DB Reading and Model"
+author: "Joseph Keogh"
+date: "10/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RPostgreSQL)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(plotly)
+library(forecast)
+```
+
+## Get data from DB
+
+### Connect to the DB
+```{r}
+# load credentials
+username <- "jgk7uf@va-energy2"
+hostname <- "va-energy2.postgres.database.azure.com"
+password <- "0Tn5KBFbm2&6bG"
+dbname <- "postgres"
+
+# open credentials
+db_driver <- dbDriver("PostgreSQL")
+db <- dbConnect(db_driver, user=username, password=password, dbname=dbname, host=hostname)
+
+# test connection if returns true the db is connected
+print(dbExistsTable(db, "test_table"))
+```
+
+
+### Grab data from DB
+```{r}
+# drop existing data
+response <- dbGetQuery(db, "SELECT * FROM test_table")
+```
+
+## Understand Data
+
+### Get basic statistics on data
+```{r}
+summary(response)
+```
+
+The first data is back in June, through beginning of October
+
+3000 Datum
+
+#### datatypes
+```{r}
+typeof(response$datetime)
+typeof(response$date)
+typeof(response$time)
+```
+
+
+#### what does the rate look like
+```{r}
+lmp_boxplot <- boxplot(response$total_lmp_rt)
+```
+
+#### Can we make the data look better
+
+##### Remove outliers
+```{r}
+# remove outliers for boxplot
+extreme_high <- lmp_boxplot$stats[5,]
+
+lmp_noxtrm <- filter(response, total_lmp_rt < extreme_high)
+
+boxplot(lmp_noxtrm$total_lmp_rt)
+
+```
+
+Removing extreme values does help the data look better
+
+##### Log transform
+```{r}
+lmp_log <- mutate(response, total_lmp_rt = log(total_lmp_rt^2+0.00000001))
+
+summary(lmp_log$total_lmp_rt)
+boxplot(lmp_log$total_lmp_rt)
+```
+
+Performing the log transform does help, but not as much as removing outliers
+
+### Decide on cleaned data
+```{r}
+extrm_high <- boxplot(response$total_lmp_rt)$stats[5]
+
+electric <- response %>%
+  filter(total_lmp_rt < extrm_high) %>%
+  mutate(datetime = ymd_hms(datetime)) %>%
+  mutate(date = ymd(date)) %>%
+  mutate(time = hms(time)) %>%
+  na.omit()
+
+summary(electric)
+```
+
+### Visualize Cleaned data
+```{r}
+ggplot(electric, aes(x=datetime, y=total_lmp_rt)) + geom_point()
+```
+
+
+## Create model
+
+### Remove trend
+
+#### Create linear model and see statistical validity
+```{r}
+lm <- lm(electric$total_lmp_rt ~ electric$datetime)
+
+summary(lm)
+```
+
+Model is signficant, see what it looks like on the data
+
+#### Plot the trendline
+```{r}
+ggplot(electric, aes(x=datetime, y=total_lmp_rt)) +
+  geom_point() +
+  geom_line(data = fortify(lm), aes(x = electric$datetime, y = .fitted))
+```
+
+### Use prediction in the future find residuals and save in dataframe
+```{r}
+electric$lm_res <- lm$residuals
+electric$lm_pred <- lm$fitted.values
+```
+
+#### Plot the residuals
+```{r}
+ggplot(electric, aes(x=datetime, y=lm_res)) +
+  geom_point()
+```
+
+This data looks stationary so we are good to move on
+
+### Remove sinusoidal movement
+
+#### Find any sinusoidal movement
+```{r}
+# create time series
+elec.ts <- ts(electric$lm_res)
+
+# find frequencies of high influence
+pgram <- spec.pgram(elec.ts, spans=9, demean=T, log='no')
+
+# sort the frequencies based on influence
+sorted.spec <- sort(pgram$spec, decreasing=T, index.return=T)
+
+# convert to periods
+sorted.omegas <- pgram$freq[sorted.spec$ix]
+sorted.Ts <- 1/pgram$freq[sorted.spec$ix]
+
+# the cutoff for influential
+pgram.cutoff <- 5
+
+# the top periods
+print('top periods')
+sorted.Ts[1:pgram.cutoff]
+
+# top frequencies
+## to double check that this makes sense based on periodogram
+print('top frequencies')
+sorted.omegas[1:pgram.cutoff]
+
+# visual
+pgram.box <- boxplot(sorted.Ts[1:pgram.cutoff], main="Period Boxplot")
+
+# the average influential period
+print('mean of top periods')
+pgram.box.mean <- pgram.box$stats[3]
+print(pgram.box.mean)
+
+# plot top periods
+plot(sorted.Ts[1:pgram.cutoff], main = "Top Periods")
+
+### create a model for the seasonality
+# assign potential periods to variables
+p1 <- sorted.Ts[1]
+p2 <- sorted.Ts[2]
+p3 <- sorted.Ts[3]
+p4 <- sorted.Ts[4]
+
+# create time variable
+time<-c(1:length(elec.ts))
+
+# model
+sin_mov <- lm(elec.ts ~ 
+                   sin(2*pi*time/p1) + 
+                   cos(2*pi*time/p1) +
+                   sin(2*pi*time/p2) + 
+                   cos(2*pi*time/p2) +
+                   sin(2*pi*time/p3) + 
+                   cos(2*pi*time/p3) +
+                   sin(2*pi*time/p4) + 
+                   cos(2*pi*time/p4)
+                   )
+
+### visualize
+plot(elec.ts)
+lines(sin_mov$fitted.values, col='red')
+
+```
+
+#### Use model to store residuals
+```{r}
+electric$sin_res <- sin_mov$residuals
+electric$sin_pred <- sin_mov$fitted.values
+```
+
+##### Plot residuals
+```{r}
+ggplot(electric, aes(x=datetime, y=sin_res)) +
+  geom_point()
+```
+
+
+There is still some cyclic movement, we can address this later
+
+### Model Residuals
+```{r}
+auto <- auto.arima(electric$sin_res, approximation = FALSE)
+
+ggplot(electric, aes(x=datetime, y=sin_res)) +
+  geom_point() +
+  geom_point(aes(x=datetime, y=auto$fitted), colour="red")
+```
+
+#### Save residual prediction
+```{r}
+electric$ar_pred <- auto$fitted
+```
+
+
+### Combine all models
+```{r}
+electric$model_final <- electric$ar_pred + electric$lm_pred + electric$sin_pred
+```
+
+### Plot the final model
+```{r}
+ggplot(electric, aes(x=datetime, y=total_lmp_rt)) +
+  geom_point() +
+  geom_point(aes(x=datetime, y=model_final), colour="red")
+```
+
+## Model validity and statistics
+
+## End of file
+```{r}
+"End of file"
+```
+
