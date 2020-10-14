@@ -51,6 +51,11 @@ The first data is back in June, through beginning of October
 
 3000 Datum
 
+```{r}
+as.numeric(max(response$date) - min(response$date))
+```
+
+
 #### datatypes
 ```{r}
 typeof(response$datetime)
@@ -92,9 +97,11 @@ Performing the log transform does help, but not as much as removing outliers
 ### Decide on cleaned data
 ```{r}
 extrm_high <- boxplot(response$total_lmp_rt)$stats[5]
+extrm_low <- boxplot(response$total_lmp_rt)$stats[1]
 
 electric <- response %>%
   filter(total_lmp_rt < extrm_high) %>%
+  filter(total_lmp_rt > extrm_low) %>%
   mutate(datetime = ymd_hms(datetime)) %>%
   mutate(date = ymd(date)) %>%
   mutate(time = hms(time)) %>%
@@ -163,6 +170,10 @@ sorted.Ts <- 1/pgram$freq[sorted.spec$ix]
 # the cutoff for influential
 pgram.cutoff <- 5
 
+# the sampling rate per day
+print('sampling rate')
+nrow(electric)/as.numeric(max(electric$date)-min(electric$date))
+
 # the top periods
 print('top periods')
 sorted.Ts[1:pgram.cutoff]
@@ -189,6 +200,7 @@ p1 <- sorted.Ts[1]
 p2 <- sorted.Ts[2]
 p3 <- sorted.Ts[3]
 p4 <- sorted.Ts[4]
+p5 <- sorted.Ts[4]
 
 # create time variable
 time<-c(1:length(elec.ts))
@@ -202,7 +214,9 @@ sin_mov <- lm(elec.ts ~
                    sin(2*pi*time/p3) + 
                    cos(2*pi*time/p3) +
                    sin(2*pi*time/p4) + 
-                   cos(2*pi*time/p4)
+                   cos(2*pi*time/p4) +
+                   sin(2*pi*time/p5) + 
+                   cos(2*pi*time/p5)
                    )
 
 ### visualize
@@ -230,6 +244,10 @@ There is still some cyclic movement, we can address this later
 ```{r}
 auto <- auto.arima(electric$sin_res, approximation = FALSE)
 
+summary(auto)
+```
+
+```{r}
 ggplot(electric, aes(x=datetime, y=sin_res)) +
   geom_point() +
   geom_point(aes(x=datetime, y=auto$fitted), colour="red")
