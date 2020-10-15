@@ -17,28 +17,72 @@ library(httr)
 
 ## Retrieve data from PJM
 
-### Connect and get raw energy data
+### Load in all the p_nodes - these are energy sections designated by an integer key
 ```{r}
-pnode=34964545
-
-r <- GET(
-  "https://api.pjm.com/api/v1/rt_unverified_fivemin_lmps", 
-  add_headers("Ocp-Apim-Subscription-Key" = "625845c6fabc4639ab91428486d8d2e2"),
-  query = 
-    list(rowCount = 10000, startRow = "1", 
-         pnode_id = pnode, 
-         sort='datetime_beginning_ept'
-         )
+pnodes <- read_csv(
+  "PJM_pnode-by-state.csv",
+  col_types = cols(
+    PNODEID = col_character()
+  )
   )
 
-temp = httr::content(r,"parsed")
+pnodes <- filter(pnodes, STATE=='VA')
 
-gen_data_today = data.table::rbindlist(temp[['items']])
-
-colnames(gen_data_today)
-head(gen_data_today)
-count(gen_data_today)
+pnodes <- head(pnodes, 1)
 ```
+
+
+### Connect and get raw energy data
+```{r}
+
+# time this operation
+start_time <- proc.time()
+
+# the dataframe that will contain all of our data
+response <- data.frame()
+
+count <- 0
+
+for (pnode in pnodes$PNODEID){
+  
+  count <- count + 1
+  
+  # query the pjm system
+  r <- GET(
+    "https://api.pjm.com/api/v1/rt_unverified_fivemin_lmps", 
+    add_headers("Ocp-Apim-Subscription-Key" = "625845c6fabc4639ab91428486d8d2e2"),
+    query = 
+      list(rowCount = 1000, startRow = "1", 
+           pnode_id = pnode, 
+           sort='datetime_beginning_ept'
+           )
+    )
+  
+  temp = httr::content(r,"parsed")
+  
+  if (nrow(response) == 0){
+    response = data.table::rbindlist(temp[['items']])
+  }
+  
+  else{
+    response <- rbind(response, data.table::rbindlist(temp[['items']]))
+  }
+  
+  print(count)
+  print(nrow(response))
+  
+}
+
+# time this operation
+end_time <- proc.time()
+print(end_time - start_time)
+
+nrow(response)
+head(response, 10)
+
+```
+
+It takes four seconds to get 1000 data points from one pnode
 
 ### Create Dataframe for Energy Data
 ```{r}

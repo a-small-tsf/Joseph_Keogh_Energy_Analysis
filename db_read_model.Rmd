@@ -112,7 +112,10 @@ summary(electric)
 
 ### Visualize Cleaned data
 ```{r}
-ggplot(electric, aes(x=datetime, y=total_lmp_rt)) + geom_point()
+ggplot(electric, aes(x=datetime, y=total_lmp_rt)) + 
+  geom_line() + 
+  labs(title="None Extreme Data", y="Marginal Price", x="Datetime")
+  
 ```
 
 
@@ -132,8 +135,10 @@ Model is signficant, see what it looks like on the data
 #### Plot the trendline
 ```{r}
 ggplot(electric, aes(x=datetime, y=total_lmp_rt)) +
-  geom_point() +
-  geom_line(data = fortify(lm), aes(x = electric$datetime, y = .fitted))
+  geom_line() +
+  geom_line(data = fortify(lm), aes(x = electric$datetime, y = .fitted), color="red") +
+  labs(title="None Extreme Data with Linear Prediction", y="Marginal Price", x="Datetime")
+
 ```
 
 ### Use prediction in the future find residuals and save in dataframe
@@ -145,7 +150,9 @@ electric$lm_pred <- lm$fitted.values
 #### Plot the residuals
 ```{r}
 ggplot(electric, aes(x=datetime, y=lm_res)) +
-  geom_point()
+  geom_line() +
+  labs(title="Linear Prediction Residuals", y="Marginal Price", x="Datetime")
+
 ```
 
 This data looks stationary so we are good to move on
@@ -220,8 +227,11 @@ sin_mov <- lm(elec.ts ~
                    )
 
 ### visualize
-plot(elec.ts)
-lines(sin_mov$fitted.values, col='red')
+ggplot(electric, aes(x=datetime, y=electric$lm_res)) +
+  geom_line() +
+  geom_line(data = fortify(lm), aes(x = electric$datetime, y = sin_mov$fitted.values), color="red") +
+  labs(title="Linear Residuals with Sinusoidal Prediction", y="Marginal Price", x="Datetime")
+
 
 ```
 
@@ -234,7 +244,9 @@ electric$sin_pred <- sin_mov$fitted.values
 ##### Plot residuals
 ```{r}
 ggplot(electric, aes(x=datetime, y=sin_res)) +
-  geom_point()
+  geom_line() +
+  labs(title="Sinusoidal Prediction Residuals", y="Marginal Price", x="Datetime")
+
 ```
 
 
@@ -249,8 +261,10 @@ summary(auto)
 
 ```{r}
 ggplot(electric, aes(x=datetime, y=sin_res)) +
-  geom_point() +
-  geom_point(aes(x=datetime, y=auto$fitted), colour="red")
+  geom_line() +
+  geom_line(aes(x=datetime, y=auto$fitted), colour="red") +
+  labs(title="Sinusoidal Prediction Residuals with ARIMA Prediction", y="Marginal Price", x="Datetime")
+
 ```
 
 #### Save residual prediction
@@ -267,8 +281,10 @@ electric$model_final <- electric$ar_pred + electric$lm_pred + electric$sin_pred
 ### Plot the final model
 ```{r}
 ggplot(electric, aes(x=datetime, y=total_lmp_rt)) +
-  geom_point() +
-  geom_point(aes(x=datetime, y=model_final), colour="red")
+  geom_line() +
+  geom_line(aes(x=datetime, y=model_final), colour="red") +
+  labs(title="None Extreme Data with Combined Prediction", y="Marginal Price", x="Datetime")
+
 ```
 
 ## Model validity and statistics
