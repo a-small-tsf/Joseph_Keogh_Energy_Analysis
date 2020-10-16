@@ -89,9 +89,6 @@ It takes four seconds to get 1000 data points from one pnode
 
 energy_clean <- gen_data_today %>%
   
-  # remove empty data
-  na.omit() %>%
-  
   # create date object
   mutate(date = str_sub(datetime_beginning_utc, 1, 10)) %>%
   mutate(date = ymd(date)) %>%
@@ -104,7 +101,10 @@ energy_clean <- gen_data_today %>%
   mutate(datetime = ymd(date)+hms(time)) %>%
   
   # only bring values we need
-  select(datetime, date, time, pnode_id, pnode_name, total_lmp_rt)
+  select(datetime, date, time, pnode_id, pnode_name, total_lmp_rt) %>%
+
+  # remove empty data
+  na.omit()
 
 ```
 
