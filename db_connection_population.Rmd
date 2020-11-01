@@ -20,38 +20,15 @@ library(dplyr)
 
 ### Load in all the p_nodes - these are energy sections designated by an integer key
 ```{r}
-#pnodes <- read_csv(
-#  "PJM_pnode-by-state.csv",
-#  col_types = cols(
-#    PNODEID = col_character()
-#  )
-#  )
-
-#pnodes <- filter(pnodes, STATE=='VA')
-
-#pnodes <- head(pnodes, 1)
-
 pnodes <- read_csv(
   "pnode_hand_written.csv",
   col_types = cols(
     PNODENAME = col_character()
   )
 )
+
+group_by(pnodes, PNODENAME)
 ```
-
-
-### Read through the pnodes to check the uniqueness of names
-```{r}
-pnode_summary <- pnodes %>%
-  select(PNODENAME)
-
-pnode_distinct <- distinct(pnode_summary, .keep_all = FALSE)
-
-pnode_distinct
-
-nrow(pnode_distinct) - nrow(pnode_summary)
-```
-
 
 ### Connect and get raw energy data
 ```{r}
@@ -89,46 +66,43 @@ for (pnode in pnodes$PNODEID){
     response <- rbind(response, data.table::rbindlist(temp[['items']]))
   }
   
-  "Node Index we are looking at"
-  print(count)
-  "Total rows found so far"
-  print(nrow(response))
-  
 }
 
 # time this operation
 end_time <- proc.time()
 print(end_time - start_time)
-
-"Rows Found"
-nrow(response)
-head(response, 10)
-
 ```
 
 It takes four seconds to get 1000 data points from one pnode
 
+#### Check the response
+```{r}
+summary(response)
+head(response)
+```
+
 ### Create Dataframe for Energy Data
 ```{r}
 
-energy_clean <- gen_data_today %>%
+energy_clean <- response %>%
   
   # create date object
-  mutate(date = str_sub(datetime_beginning_utc, 1, 10)) %>%
-  mutate(date = ymd(date)) %>%
-  
+  mutate(date = ymd(str_sub(datetime_beginning_utc, 1, 10))) %>%
+
   # create time object
-  mutate(time = str_sub(datetime_beginning_utc, 12, 19)) %>%
-  mutate(time = hms(time)) %>%
-  
+  mutate(time = hms(str_sub(datetime_beginning_utc, 12, 19))) %>%
+
   # create datetime object
-  mutate(datetime = ymd(date)+hms(time)) %>%
+  mutate(datetime = date + time) %>%
   
   # only bring values we need
   select(datetime, date, time, pnode_id, pnode_name, total_lmp_rt) %>%
 
   # remove empty data
   na.omit()
+
+summary(energy_clean)
+head(energy_clean)
 
 ```
 
