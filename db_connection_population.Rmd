@@ -13,22 +13,43 @@ library(RPostgreSQL)
 library(tidyverse)
 library(lubridate)
 library(httr)
+library(dplyr)
 ```
 
 ## Retrieve data from PJM
 
 ### Load in all the p_nodes - these are energy sections designated by an integer key
 ```{r}
+#pnodes <- read_csv(
+#  "PJM_pnode-by-state.csv",
+#  col_types = cols(
+#    PNODEID = col_character()
+#  )
+#  )
+
+#pnodes <- filter(pnodes, STATE=='VA')
+
+#pnodes <- head(pnodes, 1)
+
 pnodes <- read_csv(
-  "PJM_pnode-by-state.csv",
+  "pnode_hand_written.csv",
   col_types = cols(
-    PNODEID = col_character()
+    PNODENAME = col_character()
   )
-  )
+)
+```
 
-pnodes <- filter(pnodes, STATE=='VA')
 
-pnodes <- head(pnodes, 1)
+### Read through the pnodes to check the uniqueness of names
+```{r}
+pnode_summary <- pnodes %>%
+  select(PNODENAME)
+
+pnode_distinct <- distinct(pnode_summary, .keep_all = FALSE)
+
+pnode_distinct
+
+nrow(pnode_distinct) - nrow(pnode_summary)
 ```
 
 
@@ -52,7 +73,7 @@ for (pnode in pnodes$PNODEID){
     "https://api.pjm.com/api/v1/rt_unverified_fivemin_lmps", 
     add_headers("Ocp-Apim-Subscription-Key" = "625845c6fabc4639ab91428486d8d2e2"),
     query = 
-      list(rowCount = 1000, startRow = "1", 
+      list(rowCount = 10, startRow = "1", 
            pnode_id = pnode, 
            sort='datetime_beginning_ept'
            )
@@ -68,7 +89,9 @@ for (pnode in pnodes$PNODEID){
     response <- rbind(response, data.table::rbindlist(temp[['items']]))
   }
   
+  "Node Index we are looking at"
   print(count)
+  "Total rows found so far"
   print(nrow(response))
   
 }
@@ -77,6 +100,7 @@ for (pnode in pnodes$PNODEID){
 end_time <- proc.time()
 print(end_time - start_time)
 
+"Rows Found"
 nrow(response)
 head(response, 10)
 
