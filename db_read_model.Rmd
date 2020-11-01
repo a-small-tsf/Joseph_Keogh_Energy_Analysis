@@ -15,6 +15,7 @@ library(lubridate)
 library(ggplot2)
 library(plotly)
 library(forecast)
+library(broom)
 ```
 
 ## Get data from DB
@@ -38,7 +39,7 @@ print(dbExistsTable(db, "test_table"))
 
 ### Grab data from DB
 ```{r}
-# drop existing data
+# select all existing data
 response <- dbGetQuery(db, "SELECT * FROM test_table")
 ```
 
@@ -53,25 +54,23 @@ The first data is back in June, through beginning of October
 
 3000 Datum
 
+#### The time difference we are looking at
 ```{r}
-as.numeric(max(response$date) - min(response$date))
+as.numeric(max(response$datetime) - min(response$datetime))
 ```
 
 
 #### datatypes
 ```{r}
-typeof(response$datetime)
-typeof(response$date)
-typeof(response$time)
+class(response$datetime)
 ```
-
 
 #### what does the rate look like
 ```{r}
 lmp_boxplot <- boxplot(response$total_lmp_rt)
 ```
 
-#### Can we make the data look better
+#### Can we make the data look better?
 
 ##### Remove outliers
 ```{r}
@@ -104,17 +103,17 @@ extrm_low <- boxplot(response$total_lmp_rt)$stats[1]
 electric <- response %>%
   filter(total_lmp_rt < extrm_high) %>%
   filter(total_lmp_rt > extrm_low) %>%
-  mutate(datetime = ymd_hms(datetime)) %>%
-  mutate(date = ymd(date)) %>%
-  mutate(time = hms(time)) %>%
+  mutate(date = date(datetime)) %>%
+  mutate(time = time(datetime)) %>%
   na.omit()
 
+nrow(electric)
 summary(electric)
 ```
 
 ### Visualize Cleaned data
 ```{r}
-ggplot(electric, aes(x=datetime, y=total_lmp_rt)) + 
+ggplot(electric, aes(x=datetime, y=total_lmp_rt, group=pnode_name, color=pnode_name)) + 
   geom_line() + 
   labs(title="None Extreme Data", y="Marginal Price", x="Datetime")
   
@@ -127,9 +126,15 @@ ggplot(electric, aes(x=datetime, y=total_lmp_rt)) +
 
 #### Create linear model and see statistical validity
 ```{r}
-lm <- lm(electric$total_lmp_rt ~ electric$datetime)
 
-summary(lm)
+# group the data by node
+by_node <- group_by(electric, pnode_name)
+
+# create models by node
+do(by_node,
+   glance(
+     lm(total_lmp_rt ~ datetime, data = .)
+   ))
 ```
 
 Model is signficant, see what it looks like on the data

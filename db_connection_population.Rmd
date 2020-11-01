@@ -96,7 +96,7 @@ energy_clean <- response %>%
   mutate(datetime = date + time) %>%
   
   # only bring values we need
-  select(datetime, date, time, pnode_id, pnode_name, total_lmp_rt) %>%
+  select(datetime, pnode_id, pnode_name, total_lmp_rt) %>%
 
   # remove empty data
   na.omit()
