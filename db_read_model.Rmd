@@ -100,23 +100,44 @@ Performing the log transform does help, but not as much as removing outliers
 extrm_high <- boxplot(response$total_lmp_rt)$stats[5]
 extrm_low <- boxplot(response$total_lmp_rt)$stats[1]
 
-electric <- response %>%
+response_clean <- response %>%
   filter(total_lmp_rt < extrm_high) %>%
   filter(total_lmp_rt > extrm_low) %>%
   mutate(date = date(datetime)) %>%
   mutate(time = time(datetime)) %>%
   na.omit()
 
-nrow(electric)
-summary(electric)
+nrow(response)
+nrow(response_clean)
+summary(response_clean)
 ```
 
-### Visualize Cleaned data
+### Separate the data into separate nodes and averaged values for the nodes
 ```{r}
-ggplot(electric, aes(x=datetime, y=total_lmp_rt, group=pnode_name, color=pnode_name)) + 
+
+# separated by node
+electric_separate <- response_clean
+
+# averages of the nodes
+electric <- response_clean %>%
+  group_by(datetime) %>%
+  summarize(total_lmp_rt = mean(total_lmp_rt))
+```
+
+
+### Visualize the Cleaned data average
+```{r}
+ggplot(electric, aes(x=datetime, y=total_lmp_rt)) + 
   geom_line() + 
   labs(title="None Extreme Data", y="Marginal Price", x="Datetime")
-  
+```
+
+
+### Visualize Cleaned data by pnode
+```{r}
+ggplot(electric_separate, aes(x=datetime, y=total_lmp_rt, group=pnode_name, color=pnode_name)) + 
+  geom_line() + 
+  labs(title="None Extreme Data", y="Marginal Price", x="Datetime")
 ```
 
 
@@ -126,9 +147,17 @@ ggplot(electric, aes(x=datetime, y=total_lmp_rt, group=pnode_name, color=pnode_n
 
 #### Create linear model and see statistical validity
 ```{r}
+lm <- lm(total_lmp_rt ~ datetime, electric)
+
+summary(lm)
+```
+
+
+#### Create linear model and see statistical validity by group
+```{r}
 
 # group the data by node
-by_node <- group_by(electric, pnode_name)
+by_node <- group_by(electric_separate, pnode_name)
 
 # create models by node
 do(by_node,
