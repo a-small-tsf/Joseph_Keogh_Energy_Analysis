@@ -1,0 +1,142 @@
+---
+title: "db_read_node_specific_models"
+author: "Joseph Keogh"
+date: "11/2/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RPostgreSQL)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(plotly)
+library(forecast)
+library(broom)
+```
+
+## Get data from DB
+
+### Connect to the DB
+```{r}
+# load credentials
+username <- "jgk7uf@va-energy2"
+hostname <- "va-energy2.postgres.database.azure.com"
+password <- "0Tn5KBFbm2&6bG"
+dbname <- "postgres"
+
+# open credentials
+db_driver <- dbDriver("PostgreSQL")
+db <- dbConnect(db_driver, user=username, password=password, dbname=dbname, host=hostname)
+
+# test connection if returns true the db is connected
+print(dbExistsTable(db, "test_table"))
+```
+
+
+### Grab data from DB
+```{r}
+# select all existing data
+response <- dbGetQuery(db, "SELECT * FROM test_table")
+```
+
+## Understand Data
+
+### Get basic statistics on data
+```{r}
+summary(response)
+```
+
+The first data is back in June, through beginning of October
+
+3000 Datum
+
+#### The time difference we are looking at
+```{r}
+as.numeric(max(response$datetime) - min(response$datetime))
+```
+
+
+#### datatypes
+```{r}
+class(response$datetime)
+```
+
+#### what does the rate look like
+```{r}
+lmp_boxplot <- boxplot(response$total_lmp_rt)
+```
+
+#### Can we make the data look better?
+
+##### Remove outliers
+```{r}
+# remove outliers for boxplot
+extreme_high <- lmp_boxplot$stats[5,]
+
+lmp_noxtrm <- filter(response, total_lmp_rt < extreme_high)
+
+boxplot(lmp_noxtrm$total_lmp_rt)
+
+```
+
+Removing extreme values does help the data look better
+
+##### Log transform
+```{r}
+lmp_log <- mutate(response, total_lmp_rt = log(total_lmp_rt^2+0.00000001))
+
+summary(lmp_log$total_lmp_rt)
+boxplot(lmp_log$total_lmp_rt)
+```
+
+Performing the log transform does help, but not as much as removing outliers
+
+### Decide on cleaned data
+```{r}
+extrm_high <- boxplot(response$total_lmp_rt)$stats[5]
+extrm_low <- boxplot(response$total_lmp_rt)$stats[1]
+
+response_clean <- response %>%
+  filter(total_lmp_rt < extrm_high) %>%
+  filter(total_lmp_rt > extrm_low) %>%
+  mutate(date = date(datetime)) %>%
+  mutate(time = time(datetime)) %>%
+  na.omit()
+
+nrow(response)
+nrow(response_clean)
+summary(response_clean)
+boxplot(response_clean$total_lmp_rt)
+```
+
+### Separate the data into separate nodes and averaged values for the nodes
+```{r}
+
+# separated by node
+electric_separate <- response_clean
+
+# averages of the nodes
+electric <- response_clean %>%
+  group_by(datetime) %>%
+  summarize(total_lmp_rt = mean(total_lmp_rt))
+```
+
+### Visualize Cleaned data by pnode
+```{r}
+ggplot(electric_separate, aes(x=datetime, y=total_lmp_rt, group=pnode_name, color=pnode_name)) + 
+  geom_line() + 
+  labs(title="None Extreme Data", y="Marginal Price", x="Datetime")
+```
+
+
+
+
+
+
+
+
+## End of File

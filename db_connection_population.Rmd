@@ -50,7 +50,7 @@ for (pnode in pnodes$PNODEID){
     "https://api.pjm.com/api/v1/rt_unverified_fivemin_lmps", 
     add_headers("Ocp-Apim-Subscription-Key" = "625845c6fabc4639ab91428486d8d2e2"),
     query = 
-      list(rowCount = 1000, startRow = "1", 
+      list(rowCount = 10000, startRow = "1", 
            pnode_id = pnode, 
            sort='datetime_beginning_ept'
            )

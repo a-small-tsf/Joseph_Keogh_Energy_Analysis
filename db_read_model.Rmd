@@ -110,6 +110,7 @@ response_clean <- response %>%
 nrow(response)
 nrow(response_clean)
 summary(response_clean)
+boxplot(response_clean$total_lmp_rt)
 ```
 
 ### Separate the data into separate nodes and averaged values for the nodes
@@ -131,15 +132,6 @@ ggplot(electric, aes(x=datetime, y=total_lmp_rt)) +
   geom_line() + 
   labs(title="None Extreme Data", y="Marginal Price", x="Datetime")
 ```
-
-
-### Visualize Cleaned data by pnode
-```{r}
-ggplot(electric_separate, aes(x=datetime, y=total_lmp_rt, group=pnode_name, color=pnode_name)) + 
-  geom_line() + 
-  labs(title="None Extreme Data", y="Marginal Price", x="Datetime")
-```
-
 
 ## Create model
 
@@ -286,7 +278,7 @@ ggplot(electric, aes(x=datetime, y=sin_res)) +
 ```
 
 
-There is still some cyclic movement, we can address this later
+If there is still some cyclic movement, we can address this later
 
 ### Model Residuals
 ```{r}
