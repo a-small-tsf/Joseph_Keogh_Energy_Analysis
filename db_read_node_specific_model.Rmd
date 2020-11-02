@@ -101,8 +101,12 @@ extrm_high <- boxplot(response$total_lmp_rt)$stats[5]
 extrm_low <- boxplot(response$total_lmp_rt)$stats[1]
 
 response_clean <- response %>%
+  # filter out dates
+  filter(datetime > today() - days(3)) %>%
+  # filter out extreme days
   filter(total_lmp_rt < extrm_high) %>%
   filter(total_lmp_rt > extrm_low) %>%
+  # format classes
   mutate(date = date(datetime)) %>%
   mutate(time = time(datetime)) %>%
   na.omit()
@@ -115,7 +119,6 @@ boxplot(response_clean$total_lmp_rt)
 
 ### Separate the data into separate nodes and averaged values for the nodes
 ```{r}
-
 # separated by node
 electric_separate <- response_clean
 
@@ -130,6 +133,10 @@ electric <- response_clean %>%
 ggplot(electric_separate, aes(x=datetime, y=total_lmp_rt, group=pnode_name, color=pnode_name)) + 
   geom_line() + 
   labs(title="None Extreme Data", y="Marginal Price", x="Datetime")
+```
+
+```{r}
+ggplot(electric_separate, aes(x=datetime, y=total_lmp_rt, color=pnode_name)) + geom_point() + facet_grid(pnode_name ~ .)
 ```
 
 
