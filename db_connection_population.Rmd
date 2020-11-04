@@ -21,7 +21,7 @@ library(dplyr)
 ### Load in all the p_nodes - these are energy sections designated by an integer key
 ```{r}
 pnodes <- read_csv(
-  "pnode_hand_written.csv",
+  "Data/pnode_hand_written.csv",
   col_types = cols(
     PNODENAME = col_character()
   )
@@ -50,7 +50,8 @@ for (pnode in pnodes$PNODEID){
     "https://api.pjm.com/api/v1/rt_unverified_fivemin_lmps", 
     add_headers("Ocp-Apim-Subscription-Key" = "625845c6fabc4639ab91428486d8d2e2"),
     query = 
-      list(rowCount = 10000, startRow = "1", 
+      list(rowCount = 100, 
+           startRow = "1", 
            pnode_id = pnode, 
            sort='datetime_beginning_ept'
            )
@@ -109,11 +110,36 @@ head(energy_clean)
 ### Connect and get raw forecasting data
 ```{r}
 
+# the dataframe that will contain all of our data
+frcst_response <- data.frame()
+
+  
+# query the pjm system
+r <- GET(
+  "https://api.pjm.com/api/v1/very_short_load_frcst", 
+  add_headers("Ocp-Apim-Subscription-Key" = "625845c6fabc4639ab91428486d8d2e2"),
+  query = 
+    list(
+         )
+  )
+
+temp = httr::content(r,"parsed")
+
+frcst_response = data.table::rbindlist(temp[['items']])
+
+frcst_response
+
+```
+
+### Use downloaded data instead of connection
+```{r}
+forecasts <- read_csv("Data/very_short_load_frcst.csv")
 ```
 
 ### Create dataframe for forecasting data
 ```{r}
-
+energy_forecasts <- forecasts %>%
+  na.omit()
 ```
 
 
@@ -132,17 +158,19 @@ db_driver <- dbDriver("PostgreSQL")
 db <- dbConnect(db_driver, user=username, password=password, dbname=dbname, host=hostname)
 
 # test connection if returns true the db is connected
-print(dbExistsTable(db, "test_table"))
+print(dbExistsTable(db, "energy"))
 ```
 
 ### Create tables
 ```{r}
 
 # drop existing data
-dbGetQuery(db, "DROP TABLE test_table")
+dbGetQuery(db, "DROP TABLE energy")
+dbGetQuery(db, "DROP TABLE forecast_table")
 
 # create and write table
-dbWriteTable(db, "test_table", energy_clean, row.names=FALSE)
+dbWriteTable(db, "energy", energy_clean, row.names=FALSE)
+dbWriteTable(db, 'forecast_table', energy_forecasts, row.names=FALSE)
 
 ```
 
