@@ -16,6 +16,9 @@ library(ggplot2)
 library(plotly)
 library(forecast)
 library(broom)
+library(dplyr)
+library(ggfortify)
+library(tsibbledata)
 ```
 
 ## Get data from DB
@@ -33,21 +36,61 @@ db_driver <- dbDriver("PostgreSQL")
 db <- dbConnect(db_driver, user=username, password=password, dbname=dbname, host=hostname)
 
 # test connection if returns true the db is connected
-print(dbExistsTable(db, "test_table"))
+print(dbExistsTable(db, "energy"))
 ```
 
 
 ### Grab data from DB
 ```{r}
 # select all existing data
-response <- dbGetQuery(db, "SELECT * FROM test_table")
+response <- dbGetQuery(db, "SELECT * FROM energy")
+forecasts <- dbGetQuery(db, "SELECT * FROM forecast_table")
+
+head(response, 5)
+head(forecasts, 5)
+
+summary(response)
+summary(forecasts)
 ```
 
 ## Understand Data
 
+### Format the forecasts to be usable
+```{r}
+
+# one hour in seconds
+hour_in_seconds <- 60*60
+
+forecasts_hour <- forecasts %>%
+  
+  # scale the forecast units
+  # mutate(forecast_load_mw = forecast_load_mw/1000) %>%
+  
+  # only graph forecasts that are one hour in the future
+  mutate(time_diff = forecast_datetime - evaluation_datetime) %>%
+  subset(time_diff==hour_in_seconds) %>%
+  
+  # format the names to match the response for joining
+  mutate(datetime = forecast_datetime) %>%
+  mutate(pnode_name = forecast_area) %>%
+  select(datetime, pnode_name, forecast_load_mw)
+
+head(forecasts_hour, 5)
+summary(forecasts_hour)
+```
+
+
+### Combine forecasts with correct lmp
+```{r}
+combined_response <- left_join(response, forecasts_hour, id=c("datetime", "pnode_name")) %>% na.omit
+nrow(combined_response)
+combined_response
+```
+
+
 ### Get basic statistics on data
 ```{r}
-summary(response)
+summary(combined_response)
 ```
 
 The first data is back in June, through beginning of October
@@ -56,18 +99,26 @@ The first data is back in June, through beginning of October
 
 #### The time difference we are looking at
 ```{r}
-as.numeric(max(response$datetime) - min(response$datetime))
+as.numeric(max(combined_response$datetime) - min(combined_response$datetime))
 ```
 
 
 #### datatypes
 ```{r}
-class(response$datetime)
+class(combined_response$datetime)
 ```
 
 #### what does the rate look like
 ```{r}
-lmp_boxplot <- boxplot(response$total_lmp_rt)
+
+# distribution of lmp
+lmp_boxplot <- boxplot(combined_response$total_lmp_rt)
+
+# visual of data
+ggplot(combined_response, aes(x=datetime, y=total_lmp_rt)) + 
+  geom_line() + 
+  geom_line(aes(x=datetime, y=forecast_load_mw), color="blue") +
+  labs(title="Raw Data", y="Marginal Price", x="Datetime")
 ```
 
 #### Can we make the data look better?
@@ -77,7 +128,7 @@ lmp_boxplot <- boxplot(response$total_lmp_rt)
 # remove outliers for boxplot
 extreme_high <- lmp_boxplot$stats[5,]
 
-lmp_noxtrm <- filter(response, total_lmp_rt < extreme_high)
+lmp_noxtrm <- filter(combined_response, total_lmp_rt < extreme_high)
 
 boxplot(lmp_noxtrm$total_lmp_rt)
 
@@ -87,7 +138,7 @@ Removing extreme values does help the data look better
 
 ##### Log transform
 ```{r}
-lmp_log <- mutate(response, total_lmp_rt = log(total_lmp_rt^2+0.00000001))
+lmp_log <- mutate(combined_response, total_lmp_rt = log(total_lmp_rt^2+0.00000001))
 
 summary(lmp_log$total_lmp_rt)
 boxplot(lmp_log$total_lmp_rt)
@@ -97,17 +148,17 @@ Performing the log transform does help, but not as much as removing outliers
 
 ### Decide on cleaned data
 ```{r}
-extrm_high <- boxplot(response$total_lmp_rt)$stats[5]
-extrm_low <- boxplot(response$total_lmp_rt)$stats[1]
+extrm_high <- boxplot(combined_response$total_lmp_rt)$stats[5]
+extrm_low <- boxplot(combined_response$total_lmp_rt)$stats[1]
 
-response_clean <- response %>%
+response_clean <- combined_response %>%
   filter(total_lmp_rt < extrm_high) %>%
   filter(total_lmp_rt > extrm_low) %>%
   mutate(date = date(datetime)) %>%
   mutate(time = time(datetime)) %>%
   na.omit()
 
-nrow(response)
+nrow(combined_response)
 nrow(response_clean)
 summary(response_clean)
 boxplot(response_clean$total_lmp_rt)
@@ -122,7 +173,9 @@ electric_separate <- response_clean
 # averages of the nodes
 electric <- response_clean %>%
   group_by(datetime) %>%
-  summarize(total_lmp_rt = mean(total_lmp_rt))
+  summarize(total_lmp_rt = mean(total_lmp_rt), forecast_load_mw = mean(forecast_load_mw))
+
+summary(electric)
 ```
 
 
@@ -131,6 +184,23 @@ electric <- response_clean %>%
 ggplot(electric, aes(x=datetime, y=total_lmp_rt)) + 
   geom_line() + 
   labs(title="None Extreme Data", y="Marginal Price", x="Datetime")
+
+ggplot(electric, aes(x=datetime, y=forecast_load_mw)) + 
+  geom_line(color="blue") + 
+  labs(title="None Extreme Data", y="Load Forecast", x="Datetime")
+```
+
+## Create testing and training data
+```{r}
+electric$id <- 1:nrow(electric)
+electric_train <- electric %>% dplyr::sample_frac(.90)
+electric_test  <- dplyr::anti_join(electric, train, by = 'id')
+
+nrow(electric)
+nrow(train)
+nrow(test)
+
+nrow(train)+nrow(test)
 ```
 
 ## Create model
@@ -139,45 +209,30 @@ ggplot(electric, aes(x=datetime, y=total_lmp_rt)) +
 
 #### Create linear model and see statistical validity
 ```{r}
-lm <- lm(total_lmp_rt ~ datetime, electric)
+lm <- lm(total_lmp_rt ~ datetime, electric_train)
 
 summary(lm)
 ```
 
 
-#### Create linear model and see statistical validity by group
-```{r}
-
-# group the data by node
-by_node <- group_by(electric_separate, pnode_name)
-
-# create models by node
-do(by_node,
-   glance(
-     lm(total_lmp_rt ~ datetime, data = .)
-   ))
-```
-
-Model is signficant, see what it looks like on the data
-
 #### Plot the trendline
 ```{r}
-ggplot(electric, aes(x=datetime, y=total_lmp_rt)) +
+ggplot(electric_train, aes(x=datetime, y=total_lmp_rt)) +
   geom_line() +
-  geom_line(data = fortify(lm), aes(x = electric$datetime, y = .fitted), color="red") +
+  geom_line(data = fortify(lm), aes(x = electric_train$datetime, y = .fitted), color="red") +
   labs(title="None Extreme Data with Linear Prediction", y="Marginal Price", x="Datetime")
 
 ```
 
 ### Use prediction in the future find residuals and save in dataframe
 ```{r}
-electric$lm_res <- lm$residuals
-electric$lm_pred <- lm$fitted.values
+electric_train$lm_res <- lm$residuals
+electric_train$lm_pred <- lm$fitted.values
 ```
 
 #### Plot the residuals
 ```{r}
-ggplot(electric, aes(x=datetime, y=lm_res)) +
+ggplot(electric_train, aes(x=datetime, y=lm_res)) +
   geom_line() +
   labs(title="Linear Prediction Residuals", y="Marginal Price", x="Datetime")
 
@@ -190,7 +245,7 @@ This data looks stationary so we are good to move on
 #### Find any sinusoidal movement
 ```{r}
 # create time series
-elec.ts <- ts(electric$lm_res)
+elec.ts <- ts(electric_train$lm_res)
 
 # find frequencies of high influence
 pgram <- spec.pgram(elec.ts, spans=9, demean=T, log='no')
@@ -203,11 +258,11 @@ sorted.omegas <- pgram$freq[sorted.spec$ix]
 sorted.Ts <- 1/pgram$freq[sorted.spec$ix]
 
 # the cutoff for influential
-pgram.cutoff <- 5
+pgram.cutoff <- 10
 
 # the sampling rate per day
 print('sampling rate')
-nrow(electric)/as.numeric(max(electric$date)-min(electric$date))
+nrow(electric_train)/as.numeric(max(electric_train$datetime)-min(electric_train$datetime))
 
 # the top periods
 print('top periods')
@@ -235,29 +290,30 @@ p1 <- sorted.Ts[1]
 p2 <- sorted.Ts[2]
 p3 <- sorted.Ts[3]
 p4 <- sorted.Ts[4]
-p5 <- sorted.Ts[4]
+p5 <- sorted.Ts[5]
+p6 <- sorted.Ts[6]
 
 # create time variable
 time<-c(1:length(elec.ts))
 
 # model
 sin_mov <- lm(elec.ts ~ 
-                   sin(2*pi*time/p1) + 
-                   cos(2*pi*time/p1) +
-                   sin(2*pi*time/p2) + 
-                   cos(2*pi*time/p2) +
-                   sin(2*pi*time/p3) + 
-                   cos(2*pi*time/p3) +
-                   sin(2*pi*time/p4) + 
-                   cos(2*pi*time/p4) +
-                   sin(2*pi*time/p5) + 
-                   cos(2*pi*time/p5)
+                   sin(2*pi*time/p1)  
+                   + cos(2*pi*time/p1) 
+                   + sin(2*pi*time/p2)  
+                   + cos(2*pi*time/p2) 
+                   + sin(2*pi*time/p3)  
+                   + cos(2*pi*time/p3) 
+                   + sin(2*pi*time/p4)  
+                   + cos(2*pi*time/p4) 
+                   + sin(2*pi*time/p5)  
+                   + cos(2*pi*time/p5)
                    )
 
 ### visualize
-ggplot(electric, aes(x=datetime, y=electric$lm_res)) +
+ggplot(electric_train, aes(x=datetime, y=electric_train$lm_res)) +
   geom_line() +
-  geom_line(data = fortify(lm), aes(x = electric$datetime, y = sin_mov$fitted.values), color="red") +
+  geom_line(data = fortify(lm), aes(x = electric_train$datetime, y = sin_mov$fitted.values), color="red") +
   labs(title="Linear Residuals with Sinusoidal Prediction", y="Marginal Price", x="Datetime")
 
 
@@ -265,13 +321,13 @@ ggplot(electric, aes(x=datetime, y=electric$lm_res)) +
 
 #### Use model to store residuals
 ```{r}
-electric$sin_res <- sin_mov$residuals
-electric$sin_pred <- sin_mov$fitted.values
+electric_train$sin_res <- sin_mov$residuals
+electric_train$sin_pred <- sin_mov$fitted.values
 ```
 
 ##### Plot residuals
 ```{r}
-ggplot(electric, aes(x=datetime, y=sin_res)) +
+ggplot(electric_train, aes(x=datetime, y=sin_res)) +
   geom_line() +
   labs(title="Sinusoidal Prediction Residuals", y="Marginal Price", x="Datetime")
 
@@ -282,13 +338,13 @@ If there is still some cyclic movement, we can address this later
 
 ### Model Residuals
 ```{r}
-auto <- auto.arima(electric$sin_res, approximation = FALSE)
+auto <- auto.arima(electric_train$sin_res, approximation = FALSE)
 
 summary(auto)
 ```
 
 ```{r}
-ggplot(electric, aes(x=datetime, y=sin_res)) +
+ggplot(electric_train, aes(x=datetime, y=sin_res)) +
   geom_line() +
   geom_line(aes(x=datetime, y=auto$fitted), colour="red") +
   labs(title="Sinusoidal Prediction Residuals with ARIMA Prediction", y="Marginal Price", x="Datetime")
@@ -297,18 +353,19 @@ ggplot(electric, aes(x=datetime, y=sin_res)) +
 
 #### Save residual prediction
 ```{r}
-electric$ar_pred <- auto$fitted
+electric_train$ar_pred <- auto$fitted
 ```
 
 
 ### Combine all models
 ```{r}
-electric$model_final <- electric$ar_pred + electric$lm_pred + electric$sin_pred
+# store the values
+electric_train$model_final <- electric_train$ar_pred + electric_train$lm_pred + electric_train$sin_pred
 ```
 
 ### Plot the final model
 ```{r}
-ggplot(electric, aes(x=datetime, y=total_lmp_rt)) +
+ggplot(electric_train, aes(x=datetime, y=total_lmp_rt)) +
   geom_line() +
   geom_line(aes(x=datetime, y=model_final), colour="red") +
   labs(title="None Extreme Data with Combined Prediction", y="Marginal Price", x="Datetime")
@@ -316,6 +373,37 @@ ggplot(electric, aes(x=datetime, y=total_lmp_rt)) +
 ```
 
 ## Model validity and statistics
+
+### Plot the residuals
+```{r}
+# Create the residuals
+electric_train <- electric_train %>%
+  mutate(final_res = (model_final - total_lmp_rt))
+
+# Plot the residuals
+ggplot(electric_train, aes(x=datetime, y=final_res)) +
+  geom_line() +
+  labs(title="Final Prediction Residuals", y="Marginal Price", x="Datetime")
+
+
+```
+
+## Forecast Values
+```{r}
+
+# The data point number to simulate
+n <- 10
+next.time.time <- c(1:(n))
+next.time.lmp <- data.frame(time.lmp = next.time.time)
+head(next.time.lmp, 5)
+
+# create predictions
+E_Y.pred.lmp <- predict(lm, newdata=next.time.lmp)
+e_t.pred.lmp <- forecast(auto, h=n)
+lmp.forecast <- E_Y.pred.lmp + e_t.pred.lmp
+
+```
+
 
 ## End of file
 ```{r}

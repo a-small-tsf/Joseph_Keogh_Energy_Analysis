@@ -50,7 +50,7 @@ for (pnode in pnodes$PNODEID){
     "https://api.pjm.com/api/v1/rt_unverified_fivemin_lmps", 
     add_headers("Ocp-Apim-Subscription-Key" = "625845c6fabc4639ab91428486d8d2e2"),
     query = 
-      list(rowCount = 100, 
+      list(rowCount = 1000, 
            startRow = "1", 
            pnode_id = pnode, 
            sort='datetime_beginning_ept'
@@ -134,12 +134,36 @@ frcst_response
 ### Use downloaded data instead of connection
 ```{r}
 forecasts <- read_csv("Data/very_short_load_frcst.csv")
+
+head(forecasts, 10)
+summary(forecasts)
 ```
 
 ### Create dataframe for forecasting data
 ```{r}
 energy_forecasts <- forecasts %>%
-  na.omit()
+  # create date object
+  mutate(date = mdy(str_sub(forecast_datetime_beginning_utc, 1, 10))) %>%
+
+  # create time object
+  mutate(time = hms(str_sub(forecast_datetime_beginning_utc, 12, 19))) %>%
+
+  # create datetime object
+  mutate(forecast_datetime = date + time) %>%
+  
+  # create date object
+  mutate(date = mdy(str_sub(evaluated_at_utc, 1, 10))) %>%
+
+  # create time object
+  mutate(time = hms(str_sub(evaluated_at_utc, 12, 19))) %>%
+
+  # create datetime object
+  mutate(evaluation_datetime = date + time) %>%
+  
+  # only bring values we need
+  select(evaluation_datetime, forecast_datetime, forecast_area, forecast_load_mw)
+
+head(energy_forecasts)
 ```
 
 

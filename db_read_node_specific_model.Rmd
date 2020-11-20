@@ -33,17 +33,22 @@ db_driver <- dbDriver("PostgreSQL")
 db <- dbConnect(db_driver, user=username, password=password, dbname=dbname, host=hostname)
 
 # test connection if returns true the db is connected
-print(dbExistsTable(db, "test_table"))
+print(dbExistsTable(db, "energy"))
 ```
 
 
 ### Grab data from DB
 ```{r}
 # select all existing data
-response <- dbGetQuery(db, "SELECT * FROM test_table")
+response <- dbGetQuery(db, "SELECT * FROM energy")
+forecasts <- dbGetQuery(db, "SELECT * FROM forecast_table")
+
+head(response, 5)
+head(forecasts, 5)
 ```
 
 ## Understand Data
+
 
 ### Get basic statistics on data
 ```{r}

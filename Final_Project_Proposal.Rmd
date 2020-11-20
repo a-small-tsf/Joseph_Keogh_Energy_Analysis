@@ -1,0 +1,825 @@
+---
+title: "DERM Final Project Proposal"
+author: "Joseph Keogh"
+date: "11/19/2020"
+output:
+  pdf_document: default
+  html_document: default
+institute: SYS 7030 Time Series Analysis & Forecasting, Fall 2020
+---
+
+# Introduction
+
+With climate change ever looming societies, industries and governments are looking to move away from fossil fuels and towards more renewable energy.  The main benefit of renewable energy is that they do not harm the environment in the process of producing electricity and subsequently power.  One large problem with renewable energy is the lack of uniform production of the energy.  Wind, solar, and tides have ever changing power outputs.  The result of this non-uniform output is a surplus of energy at times, and a lack of energy at others.
+
+The challenge that this produces is where to store the electricity when there is a surplus, and where to draw from when there is a deficit.  This is where a Distributed Electrical Resource Management (DERM) system comes into play.  The idea is to decentralize electricity storage from the electricity companies down to individuals.  An individual for example would use their electric car to store electricity when there is a surplus in the system.
+
+This individual would be providing the service of storing electricity while benefiting monetarily when they sell back the electricity to the provider.
+
+The research question is exploring if it is possible/ reasonable to pursue a DERM system in order to help facilitate the move over to renewable power.  To help answer this question we will use modeling and forecasting techniques to create a model for citizens to use to store and sell electricity.  We will simulate electric car owners utilizing this system for personal gain
+
+# The data and the data-generating process
+
+We are using two datasets: lmp and forecasts mwhours both come from pjm a 
+  -PJM is a regional transmission organization (RTO) that coordinates the movement of wholesale electricity in all or parts of 13 states and the District of Columbia (PJM.com).  PJM collects the data by monitoring the price that electricity providers are charging users in real time.  They are able to do this because they facilitate the transfer of electricity from the power company to the citizens  The data is valid because PJM has direct access to the LMP as it is a distributer.  Forecasts cannot be validated as no one can know the future load on the electrical system.  We will however be using the forecasts to provide added information to our model
+  
+Both datasets are collected at 5 minute intervals
+
+The lmp data is queried from the PJM database api at https://api.pjm.com/api/v1/rt_unverified_fivemin_lmps
+
+The forecast data is downloaded manually from https://dataminer2.pjm.com/feed/very_short_load_frcst by selecting the specific data and time we will be looking at
+
+```{r setup, echo=FALSE, warning=FALSE, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RPostgreSQL)
+library(tidyverse)
+library(lubridate)
+library(httr)
+library(dplyr)
+library(RPostgreSQL)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(plotly)
+library(forecast)
+library(broom)
+library(dplyr)
+library(ggfortify)
+library(tsibbledata)
+library(tidyverse)
+```
+
+# Generate the Data
+
+## Retrieve data from Pre loaded database
+
+### Connect to the DB
+```{r connect to DB, include=FALSE}
+# load credentials
+username <- "jgk7uf@va-energy2"
+hostname <- "va-energy2.postgres.database.azure.com"
+password <- "0Tn5KBFbm2&6bG"
+dbname <- "postgres"
+
+# open credentials
+db_driver <- dbDriver("PostgreSQL")
+db <- dbConnect(db_driver, user=username, password=password, dbname=dbname, host=hostname)
+
+# test connection if returns true the db is connected
+print(dbExistsTable(db, "energy"))
+```
+
+Here we connect to our personal database where we have stored the PJM data
+
+### Grab data from DB
+```{r Get Data from DB, cache=TRUE, echo=FALSE}
+# select all existing data
+response <- dbGetQuery(db, "SELECT * FROM energy")
+forecasts <- dbGetQuery(db, "SELECT * FROM forecast_table")
+```
+
+Here we download the data from our personal database into dataframes using SQL queries.
+
+### Check data output to ensure it worked
+```{r inspect the data, echo=FALSE, include=FALSE}
+head(response, 5)
+head(forecasts, 5)
+summary(response)
+summary(forecasts)
+```
+
+# Understand Data
+
+In this section we are going to do our best to understand the data that we are working with.  This is can also be referred to as 'Data Exploration'.
+
+## Format the data
+
+The raw data we have recieved is likely not in a perfect format for analysis.  We need to format the data into a more usable schema
+
+### Format the forecasts data
+```{r format the forecast data}
+# one hour in seconds
+hour_in_seconds <- 60*60
+
+forecasts_hour <- forecasts %>%
+  
+  # only collect forecasts that are one hour in the future
+  mutate(time_diff = forecast_datetime - evaluation_datetime) %>%
+  subset(time_diff==hour_in_seconds) %>%
+  
+  # format the names to match the response for joining
+  mutate(datetime = forecast_datetime) %>%
+  mutate(pnode_name = forecast_area) %>%
+  select(datetime, pnode_name, forecast_load_mw)
+```
+
+#### Check the formatting
+```{r, echo=FALSE}
+head(forecasts_hour, 5)
+summary(forecasts_hour)
+```
+
+
+We choose to simplify the analysis by only looking at forecasts that are made one hour prior to the forecasted time.  The goal is to create a one to one mapping of forecasts to real time LMP.
+
+This time interval can easily be changed in further analysis.  It is recommeded that other time intervals, and a many to one mapping be explored in further analysis.
+
+### Combine forecasts with correct lmp
+```{r, results='hide'}
+combined_response <- left_join(response, forecasts_hour, id=c("datetime", "pnode_name")) %>% na.omit
+```
+
+Here we do the actual one to one mapping of the forecast data to the LMP data.  For the remainder of the proposal we will refer to two main datasets.  The first being 'LMP Data' which is the LMP data that was not combined with the forecasts, and 'Combined Data' which is the LMP data matched with the Forecast data.
+
+#### Inspect the combined data
+```{r, include=FALSE}
+nrow(combined_response)/nrow(response)
+nrow(combined_response)/ nrow(forecasts)
+nrow(combined_response)/ nrow(forecasts_hour)
+```
+
+The combined data has `r nrow(combined_response)*100/nrow(response)`% of the original LMP data
+
+The combined data has `r nrow(combined_response)*100/nrow(forecasts)`% of the original Forecasts data
+
+The combined data has `r nrow(combined_response)*100/nrow(forecasts_hour)`% of the Combined data
+
+```{r, echo=FALSE}
+head(combined_response, 5)
+summary(combined_response)
+```
+
+### The time difference we are looking at
+```{r, include=FALSE}
+as.numeric(max(response$datetime) - min(response$datetime))
+as.numeric(max(combined_response$datetime) - min(combined_response$datetime))
+```
+
+The LMP only data is over a span of `r as.numeric(max(response$datetime) - min(response$datetime))` days
+
+The Combined data is over a span of `r as.numeric(max(combined_response$datetime) - min(combined_response$datetime))` days
+
+## Visualize the LMP Data
+```{r, echo=FALSE}
+# distribution
+lmp_boxplot <- boxplot(response$total_lmp_rt, main="Boxplot of Raw LMP Data")
+
+# histogram
+hist(response$total_lmp_rt)
+
+# graphically
+ggplot(response, aes(x=datetime, y=total_lmp_rt, group=pnode_name, color=pnode_name)) + 
+  geom_line() + 
+  labs(title="Raw LMP Data", y="Marginal Price", x="Datetime")
+```
+
+Severe outliers in the data
+
+## Visualize the combined data
+```{r, echo=FALSE}
+# distribution
+lmp_boxplot <- boxplot(combined_response$total_lmp_rt, main="LMP RT Boxplot Combined Data")
+
+# histogram
+hist(combined_response$total_lmp_rt)
+
+# graphically
+ggplot(combined_response, aes(x=datetime, y=total_lmp_rt, group=pnode_name, color=pnode_name)) + 
+  geom_line() + 
+  labs(title="Raw Combined Data", y="Marginal Price", x="Datetime")
+
+lmp_boxplot <- boxplot(combined_response$forecast_load_mw, main="Forecasts Load MW Boxplot Combined Data")
+
+hist(combined_response$forecast_load_mw)
+
+ggplot(combined_response, aes(x=datetime, y=forecast_load_mw, group=pnode_name, color=pnode_name)) + 
+  geom_line() + 
+  labs(title="Raw Combined Data", y="Forecasted Load MW", x="Datetime")
+
+
+```
+
+Very skewed LMP data, likely due to a few large outliers
+
+Forecast MW data seems to be more uniformly distributed, with periods of no data during the day
+
+## Can we make the data look better?
+
+### Log transform of LMP data
+```{r, echo=FALSE}
+lmp_log <- mutate(response, total_lmp_rt = log(total_lmp_rt^2+0.00000001))
+
+boxplot(lmp_log$total_lmp_rt, main="Log Transform of LMP Data Boxplot")
+```
+
+### Log transform of combined data
+```{r, echo=FALSE}
+lmp_log <- mutate(combined_response, total_lmp_rt = log(total_lmp_rt^2+0.00000001))
+
+boxplot(lmp_log$total_lmp_rt, main="Log Transform of LMP Combined Data Boxplot")
+```
+
+Log transform results in data looking slightly more normally distributed, but still not ideal as outliers still have a large impact on the distribution
+
+### Decide on cleaned data
+```{r}
+extrm_high <- boxplot(combined_response$total_lmp_rt, plot=FALSE)$stats[5]
+extrm_low <- boxplot(combined_response$total_lmp_rt, plot=FALSE)$stats[1]
+
+combined_clean <- combined_response %>%
+  filter(total_lmp_rt < extrm_high) %>%
+  filter(total_lmp_rt > extrm_low) %>%
+  mutate(date = date(datetime)) %>%
+  mutate(time = time(datetime)) %>%
+  na.omit()
+
+electric_clean <- response %>%
+  filter(total_lmp_rt < extrm_high) %>%
+  filter(total_lmp_rt > extrm_low) %>%
+  mutate(date = date(datetime)) %>%
+  mutate(time = time(datetime)) %>%
+  na.omit()
+```
+
+#### Inspect cleaned data
+```{r, echo=FALSE}
+summary(electric_clean)
+boxplot(electric_clean$total_lmp_rt, main="Boxplot of LMP Cleaned Data")
+hist(electric_clean$total_lmp_rt)
+
+
+summary(combined_clean)
+boxplot(combined_clean$total_lmp_rt, main="Boxplot of Combined Cleaned Data")
+hist(combined_clean$total_lmp_rt)
+```
+
+The LMP cleaned data has `r nrow(electric_clean)/nrow(response)`% of the raw LMP data
+
+The LMP cleaned data has `r nrow(combined_clean)/nrow(combined_response)`% of the raw LMP data
+
+## Separate the data into separate nodes and averaged values for the nodes
+```{r, warning=FALSE, results='hide'}
+# combined separated by node
+electric_combined_nodes <- combined_clean 
+
+# combined averages of the nodes
+electric_combined_average <- combined_clean %>%
+  group_by(datetime) %>%
+  summarize(total_lmp_rt = mean(total_lmp_rt), forecast_load_mw = mean(forecast_load_mw)) 
+
+# separated by node
+electric_nodes <- electric_clean 
+
+# averages of the nodes
+electric_average <- electric_clean %>%
+  group_by(datetime) %>%
+  summarize(total_lmp_rt = mean(total_lmp_rt)) 
+```
+
+## Visualize Cleaned Data
+
+### Plot the LMP Data
+```{r, echo=FALSE}
+ggplot(electric_average, aes(x=datetime, y=total_lmp_rt)) + 
+  geom_line() + 
+  labs(title="Cleaned LMP Data Averaged", y="Marginal Price", x="Datetime")
+
+ggplot(electric_nodes, aes(x=datetime, y=total_lmp_rt, group=pnode_name, color=pnode_name)) + 
+  geom_line() + 
+  labs(title="Cleaned LMP Data Node Specific", y="Marginal Price", x="Datetime")
+```
+
+### Plot the Combined Data
+```{r, echo=FALSE}
+
+# LMP with nodes
+ggplot(electric_combined_nodes, aes(x=datetime, y=total_lmp_rt, group=pnode_name, color=pnode_name)) + 
+  geom_line() + 
+  labs(title="Cleaned Combined Data Node Specific", y="Marginal Price", x="Datetime")
+
+# Forecasts with nodes
+ggplot(electric_combined_nodes, aes(x=datetime, y=forecast_load_mw, group=pnode_name, color=pnode_name)) + 
+  geom_line() + 
+  labs(title="Cleaned Combined Data Node Specific", y="Marginal Price", x="Datetime")
+
+# LMP Average
+ggplot(electric_combined_average, aes(x=datetime, y=total_lmp_rt)) + 
+  geom_line() + 
+  labs(title="Cleaned Combined Data Average", y="Marginal Price", x="Datetime")
+
+# Forecasts average
+ggplot(electric_combined_average, aes(x=datetime, y=forecast_load_mw)) + 
+  geom_line(color="blue") + 
+  labs(title="Cleaned Combined Data Average", y="Load Forecast", x="Datetime")
+```
+
+## Decide on averaged or node specific data for analysis
+
+We will first do analysis on just the LMP data without the forecasts.  This dataset is larger and has less holes in it.
+
+The matching of the forecasts and the LMP data creates holes in the LMP data as the forecasts do not exists throughout the day
+
+We will also start with the averaged data, not the node specific data
+
+## Create testing and training data
+```{r}
+# the index to split the data on
+separationIndex <- nrow(electric_average)-(60/5)
+
+# split the data
+electric_train <- electric_average[1:separationIndex-1,]
+electric_test <- electric_average[separationIndex:nrow(electric_average),]
+```
+
+We have choosen to use one hour of testing data.  This is obtained by taking 60min / 5min as 5 minutes is the frequency of the data.
+
+This has been choosen as the application of forecasting prices for an electric vehicle will not involve long term predictions, only predictions that will impact the next hour or so of charging.
+
+### Check the training and testing data
+```{r, include=FALSE}
+nrow(electric_average)
+nrow(electric_train)/nrow(electric_average)
+nrow(electric_test)/nrow(electric_average)
+nrow(electric_train)+nrow(electric_test)
+```
+
+The training data has `r nrow(electric_train)*100/nrow(electric_average)`% of the cleaned LMP averaged data
+The testing data has `r nrow(electric_test)*100/nrow(electric_average)`% of the cleaned LMP averaged data
+
+
+# Create Mostly Hand Made model
+
+The first model created will not take into account the forecasts being provided by pjm.  The data we will use first will the raw lmp data that has been cleaned to remove outliers.  This data is more complete than when we combine the forecasts with this cleaned data set.
+
+## Remove trend
+
+### Create linear model and see statistical validity
+```{r}
+lm <- lm(total_lmp_rt ~ datetime, electric_train)
+```
+
+### Check the model
+```{r}
+summary(lm)
+```
+
+The linear trend model is significant so it will be considered for further analysis
+
+### Plot the trendline
+```{r, echo=FALSE}
+ggplot(electric_train, aes(x=datetime, y=total_lmp_rt)) +
+  geom_line() +
+  geom_line(data = fortify(lm), aes(x = electric_train$datetime, y = .fitted), color="red") +
+  labs(title="Cleaned LMP Data with Linear Trend Prediction", y="Marginal Price", x="Datetime")
+```
+
+### Use prediction in the future find residuals and save in dataframe
+```{r}
+electric_train$lm_res <- lm$residuals
+electric_train$lm_pred <- lm$fitted.values
+```
+
+#### Plot the residuals
+```{r, echo=FALSE}
+ggplot(electric_train, aes(x=datetime, y=lm_res)) +
+  geom_line() +
+  labs(title="Linear Trend Prediction Residuals", y="Residual of Marginal Price", x="Datetime")
+```
+
+## Remove sinusoidal movement
+
+### Find any sinusoidal movement
+```{r}
+# create time series
+elec.ts <- ts(electric_train$lm_res)
+
+# find frequencies of high influence
+pgram <- spec.pgram(elec.ts, spans=9, demean=T, log='no')
+
+# sort the frequencies based on influence
+sorted.spec <- sort(pgram$spec, decreasing=T, index.return=T)
+
+# convert to periods
+sorted.omegas <- pgram$freq[sorted.spec$ix]
+sorted.Ts <- 1/pgram$freq[sorted.spec$ix]
+
+# the cutoff for influential
+pgram.cutoff <- 10
+
+# the sampling rate per day
+print('sampling rate')
+nrow(electric_train)/as.numeric(max(electric_train$datetime)-min(electric_train$datetime))
+
+# the top periods
+print('top periods')
+sorted.Ts[1:pgram.cutoff]
+
+# top frequencies
+## to double check that this makes sense based on periodogram
+print('top frequencies')
+sorted.omegas[1:pgram.cutoff]
+
+# visual
+pgram.box <- boxplot(sorted.Ts[1:pgram.cutoff], main="Period Boxplot")
+
+# the average influential period
+print('mean of top periods')
+pgram.box.mean <- pgram.box$stats[3]
+print(pgram.box.mean)
+
+# plot top periods
+plot(sorted.Ts[1:pgram.cutoff], main = "Top Periods")
+
+### create a model for the seasonality
+# assign potential periods to variables
+p1 <- sorted.Ts[1]
+p2 <- sorted.Ts[2]
+p3 <- sorted.Ts[3]
+p4 <- sorted.Ts[4]
+p5 <- sorted.Ts[5]
+p6 <- sorted.Ts[6]
+
+# create time variable
+time<-c(1:length(elec.ts))
+
+# model
+sin_mov <- lm(elec.ts ~ 
+                   sin(2*pi*time/p1)  
+                   + cos(2*pi*time/p1) 
+                   + sin(2*pi*time/p2)  
+                   + cos(2*pi*time/p2) 
+                   + sin(2*pi*time/p3)  
+                   + cos(2*pi*time/p3) 
+                   + sin(2*pi*time/p4)  
+                   + cos(2*pi*time/p4) 
+                   + sin(2*pi*time/p5)  
+                   + cos(2*pi*time/p5)
+                   )
+summary(sin_mov)
+```
+
+### Plot sinusoidal movement
+```{r, echo=FALSE}
+### visualize
+ggplot(electric_train, aes(x=datetime, y=lm_res)) +
+  geom_line() +
+  geom_line(data = fortify(lm), aes(x = electric_train$datetime, y = sin_mov$fitted.values), color="red") +
+  labs(title="Linear Residuals with Sinusoidal Prediction", y="Marginal Price", x="Datetime")
+```
+
+### Use model to store residuals
+```{r}
+electric_train$sin_res <- sin_mov$residuals
+electric_train$sin_pred <- sin_mov$fitted.values
+```
+
+#### Plot residuals
+```{r, echo=FALSE}
+ggplot(electric_train, aes(x=datetime, y=sin_res)) +
+  geom_line() +
+  labs(title="Sinusoidal Prediction Residuals", y="Residual of Marginal Price", x="Datetime")
+```
+
+## Model Residuals
+```{r}
+auto <- auto.arima(electric_train$sin_res, approximation = FALSE)
+summary(auto)
+```
+
+
+```{r, echo=FALSE}
+ggplot(electric_train, aes(x=datetime, y=sin_res)) +
+  geom_line() +
+  geom_line(aes(x=datetime, y=auto$fitted), colour="red") +
+  labs(title="Sinusoidal Prediction Residuals with ARIMA Prediction", y="Marginal Price", x="Datetime")
+```
+
+#### Save residual prediction
+```{r}
+electric_train$ar_pred <- auto$fitted
+```
+
+### Combine all models
+```{r}
+# store the values
+electric_train$model_final <- electric_train$ar_pred + electric_train$lm_pred + electric_train$sin_pred
+```
+
+### Plot the final model predictions
+```{r, echo=FALSE}
+ggplot(electric_train, aes(x=datetime, y=total_lmp_rt)) +
+  geom_line() +
+  geom_line(aes(x=datetime, y=model_final), colour="red") +
+  labs(title="Cleaned LMP Data with Final Prediction", y="Marginal Price", x="Datetime")
+```
+
+## Model validity and statistics
+
+### Plot the residuals
+```{r, echo=FALSE}
+# Create the residuals
+electric_train <- electric_train %>%
+  mutate(final_res = (model_final - total_lmp_rt))
+
+# Plot the residuals
+ggplot(electric_train, aes(x=datetime, y=final_res)) +
+  geom_line() +
+  labs(title="Final Prediction Residuals", y="Marginal Price", x="Datetime")
+
+# Histogram of residuals
+hist(electric_train$final_res)
+```
+
+### Forecast values
+```{r}
+# create dataframe for forecasted values
+future <- electric_test %>%
+  select(datetime)
+
+# create predictions
+E_Y.pred.lmp <- predict(lm, newdata=future)
+e_t.pred.lmp <- forecast(auto, h=nrow(future))
+lmp.forecast <- E_Y.pred.lmp + e_t.pred.lmp$mean
+```
+
+
+#### Plot Forecasted Values
+```{r, echo=FALSE}
+ggplot(electric_test, aes(x=datetime, y=total_lmp_rt)) +
+  geom_line() +
+  geom_line(aes(x=datetime, y=lmp.forecast), colour="red") +
+  geom_line(aes(x=datetime, y=E_Y.pred.lmp + e_t.pred.lmp$lower[,2]), colour="orange") +
+  geom_line(aes(x=datetime, y=E_Y.pred.lmp + e_t.pred.lmp$upper[,2]), colour="orange") +
+  labs(title="Cleaned LMP Data with Final Prediction", y="Marginal Price", x="Datetime")
+```
+
+From the graph we can see that our model completes the test within our confidence interval 90%
+
+# Explore using nodes as parameters
+
+## Create Training and testing data
+```{r, echo=FALSE}
+# the index to split the data on
+separationIndex <- nrow(electric_nodes)-(60/5)
+
+# split the data
+electric_nodes_train <- electric_nodes[1:separationIndex-1,]
+electric_nodes_test <- electric_nodes[separationIndex:nrow(electric_nodes),]
+```
+
+The same technique is used to split the data into training and testing, using one hour as the testing data
+## Create the Model
+```{r}
+# Use as factor
+electric_nodes_train$pnode_name <- as.factor(electric_nodes_train$pnode_name)
+# Create the Model
+lm_nodes <- lm(total_lmp_rt ~ pnode_name + datetime, data=electric_nodes_train)
+```
+
+## Check the Model
+```{r, echo=FALSE}
+summary(lm_nodes)
+```
+
+We can see that since the model is signficant and that there are pnodes that are signficiant, this shows that adding pnodes as a predictor will help us in creating our model
+
+## Plot the linear model
+```{r, echo=FALSE}
+ggplot(electric_nodes_train, aes(x=datetime, y=total_lmp_rt)) +
+  geom_line() +
+  geom_line(data = fortify(lm_nodes), aes(x = electric_nodes_train$datetime, y = .fitted), color="red") +
+  labs(title="Cleaned LMP Data with Linear Node Prediction", y="Marginal Price", x="Datetime")
+```
+
+
+# Explore Modeling with the forecasts
+
+## Create Training and Testing Data
+```{r}
+# the index to split the data on
+separationIndex <- nrow(electric_combined_average)-(60/5)
+
+# split the data
+electric_combined_train <- electric_combined_average[1:separationIndex-1,]
+electric_combined_test <- electric_combined_average[separationIndex:nrow(electric_combined_average),]
+```
+
+## Create the Model
+```{r}
+# Create the Model
+lm_forecast <- lm(total_lmp_rt ~ forecast_load_mw + datetime, data=electric_combined_train)
+```
+
+## Check the Model
+```{r, echo=FALSE}
+summary(lm_forecast)
+```
+
+When adding forecasts, the datetime is no longer a significant parameter, this is likely due to the holes in the dataset
+
+We will remove datatime from this linear model
+```{r, echo=FALSE}
+lm_forecast <- lm(total_lmp_rt ~ forecast_load_mw, data=electric_combined_train)
+```
+
+## Visualize the Model
+```{r, echo=FALSE}
+ggplot(electric_combined_train, aes(x=datetime, y=total_lmp_rt)) +
+  geom_line() +
+  geom_line(data = fortify(lm_forecast), aes(x = electric_combined_train$datetime, y = .fitted), color="red") +
+  labs(title="Cleaned Combined Data with Linear Forecast Prediction", y="Marginal Price", x="Datetime")
+```
+
+# Explore modeling with both node and forecast
+
+## Create testing and training data
+```{r, echo=FALSE}
+# the index to split the data on
+separationIndex <- nrow(electric_combined_nodes)-(60/5)
+
+# split the data
+electric_combined_nodes_train <- electric_combined_nodes[1:separationIndex-1,]
+electric_combined_nodes_test <- electric_combined_nodes[separationIndex:nrow(electric_combined_nodes),]
+```
+
+The same technique is used to separate training and testing data, one hour is used as testing data.
+
+## Create Model
+```{r}
+lm_node_forecast <- lm(total_lmp_rt ~ forecast_load_mw + pnode_name + datetime, data=electric_combined_nodes_train)
+```
+
+## Check Model
+```{r, echo=FALSE}
+summary(lm_node_forecast)
+```
+
+In this model, all parameters are significant
+
+## Plot Model
+```{r, echo=FALSE}
+ggplot(electric_combined_nodes_train, aes(x=datetime, y=total_lmp_rt)) +
+  geom_line() +
+  geom_line(data = fortify(lm_node_forecast), aes(x = datetime, y = .fitted), color="red") +
+  labs(title="Cleaned Combined Data with Linear Forecast Prediction", y="Marginal Price", x="Datetime")
+```
+
+# Choose the best linear model to use on our final model
+```{r}
+AIC(lm)
+AIC(lm_nodes)
+AIC(lm_forecast)
+AIC(lm_node_forecast)
+```
+
+The linear model with the smallest AIC is the model that only uses the forecasted values
+
+While this would tell us we should use the forecasted model, we are going to continue with our original model of just datetime, as the data is much nicer and easier to work with.
+
+We recommend the other models be explored in more detail in the future.
+
+# Simulation
+
+Here we are going to see if we can make a profit off of our model.  We will use the following logic to design our simulation:
+
+We will simulate time passing by iterating through our testing data (five minute intervals)
+
+Each five minute interval the logic will look at the current price of electricity and the forecasted price of the next five minutes
+
+Electricity will be bought or sold according to the relation between the current and next forecasted price
+
+We will keep track of the money and electricity gained and lost
+
+```{r}
+# create the simulation dataframe
+sim <- electric_test %>%
+  mutate(forecast = lmp.forecast)
+
+# Parameters to keep track of
+no_model_cash <- 0
+no_model_units <- 0
+model_cash <- 0
+model_units <- 0
+
+# iterate through the simulation
+for (d in sim$id[1:nrow(sim)-1]){
+  
+  # the values we are interested in
+  current_lmp <- subset(sim, id==d)$total_lmp_rt
+  forecast_next_lmp <- subset(sim, id==d+1)$forecast
+  
+  # pay for current electricity
+  if (forecast_next_lmp > current_lmp){
+    model_cash <- model_cash - current_lmp
+    model_units <- model_units + 1
+  }
+  # sell back electricity
+  else{
+    model_cash <- model_cash + current_lmp
+    model_units <- model_units - 1
+  }
+  
+  # baseline for always buying electricity
+  no_model_cash <- no_model_cash - current_lmp
+  no_model_units <- no_model_units + 1
+}
+
+```
+
+Our baseline car owner gained $`r no_model_cash` for `r no_model_units` units of electricity 
+Our model using car owner gained $`r model_cash` for `r model_units` units of electricity 
+
+Our simulation above works on a very simple rule, only looking five minutes ahead: if the forecasted price in the next five minutes is higher than it is now, buy electricity, if the price is not higher, sell the electricity you currenlty have
+
+This is far from a perfect analysis as there is no goal built into the simulation.  However it is believed that this shows the proof of concept for the model based electricity forecasting to buy and sell electricity.
+
+# Conclusion
+
+## Model Valilidity
+
+Our final model using the strictly linear trend model, sinusoidal movement, and arima gives us a fairly accurate model to forecast off of.  We recieved a MSE score of `r sum((sim$forecast-sim$total_lmp_rt)^2)/nrow(sim)` (how many dollars our model is off on average squared).  
+
+## Next Steps
+
+To extend this initial research it is advised to: 
+
+A person that has experience trading equities should be added onto the project.  They will help develop an algorithm for when to buy and sell the electricity.
+
+Look closer into techniques to utilize the forecasted load on the electrical system.  This may include aquiring a more complete dataset from PJM.  Also, multiple forecasts being taken into account, possible in the form of bayesian forecasting theory should be utilized.
+
+A goal oriented simulation should be contucted.  This would be closer to the reality of an electric car filling up overnight.  The goal would be to obtain X units of electricity while gaining the most amount of money (losing the least amount of money) possible.
+
+## Possible Problems
+
+A large problem that could be introduced while implemented this Distributed Electrical Resource Management System is the creation of a stock market for electricity.  This could introduce the "Efficient Market Hypothesis" where all information becomes null and void as everyone has access to the same information.
+
+The model proposed has only been validated for a short period of time.  For the DERM model to be effective it will have to be implemented all year, as that is the driving seasonality to energy production, since the weather works on a yearly timeline.  A model that is able to forecast much further in time is needed to create an year long efficient DERM system. 
+
+For a DERM system to be better understood, it is recommended that a similar approach to the one in this proposal be taken.  The problem is less on how efficient can we forecast the price of electricity but rather, what parameters need to be met to ensure an efficient DERM system.  Parameters such as: Decentralized battery storage, latency times, and the push and pull capabilities of the current infrastructure.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
